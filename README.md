@@ -2,6 +2,7 @@
 This code runs a raspberry pi using multiprocessing to 
 - play a light animation
 - detect motion from the raspberry pi camera
+- control another set of lights over IR
 
 When it detects motion it changes the light animation
 
