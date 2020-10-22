@@ -1,3 +1,4 @@
+
 #!/usr/bin/python
 
 # original script adopted from brainflakes
@@ -15,11 +16,10 @@
 
 #Run this script with sudo python3 
 
-
 #What it does!
 #This script uses the raspberry pi camera to detect motion and change a light strip's colour
 #It uses multiprocessing to check for motion and play light animations at the same time
-#When motion is detected it changes the animation on the lightstrip 
+#When motion is detected it changes the animation on the lightstrip AND it sends an IR signal to another strip of lights!
 
 from multiprocessing import Process, Value
 import subprocess
@@ -32,12 +32,14 @@ import board
 import neopixel
 import io
 from itertools import zip_longest
+import json
+import pigpio # http://abyz.co.uk/rpi/pigpio/python.html
 
 #set personDetected to false
 personDetected = Value("b",0)
 
 #setup the neopixel stuff. D18 is the pin the neopixel strip is connected to on the pi
-pixel_pin = board.D18
+pixel_pin = board.D10
 num_pixels = 151
 ORDER = neopixel.GRB
 on_time = 0.04
@@ -67,6 +69,10 @@ colour2 = (255,255,0)
 colour3 = (255,100,125)	
 colour4 = (255,0,255)
 colour5 = (0,255,255)
+
+gap = 100
+GAP_MS = gap
+GAP_S      = GAP_MS  / 1000.0
 
 
 # Motion detection settings:
@@ -137,8 +143,8 @@ def saveImage(settings, width, height, quality, diskSpaceToReserve):
     keepDiskSpaceFree(diskSpaceToReserve)
     time = datetime.now()
     filename = filepath + "/" + filenamePrefix + "-%04d%02d%02d-%02d%02d%02d.jpg" % (time.year, time.month, time.day, time.hour, time.minute, time.second)
-    subprocess.call("raspistill %s -w %s -h %s -t 200 -e jpg -q %s -n -o %s" % (settings, width, height, quality, filename), shell=True)
-    print ("Captured %s" % filename)
+    #subprocess.call("raspistill %s -w %s -h %s -t 200 -e jpg -q %s -n -o %s" % (settings, width, height, quality, filename), shell=True)
+    #print ("Captured %s" % filename)
 
 # Keep free space above given level
 def keepDiskSpaceFree(bytesToReserve):
@@ -216,7 +222,7 @@ def cameraCode(person):
 			person.value = 1			
 			lastCapture = time.time()			
 			#you don't have to save the image! it's just going to be dark with a spot of light...
-			saveImage(cameraSettings, saveWidth, saveHeight, saveQuality, diskSpaceToReserve)
+	#		saveImage(cameraSettings, saveWidth, saveHeight, saveQuality, diskSpaceToReserve)
 		else:			
 			person.value = 0
 
@@ -224,6 +230,28 @@ def cameraCode(person):
 		image1 = image2
 		buffer1 = buffer2
 
+		
+def carrier(gpio, frequency, micros):
+   """
+   Generate carrier square wave.
+   """
+   wf = []
+   cycle = 1000.0 / frequency
+   cycles = int(round(micros/cycle))
+   on = int(round(cycle / 2.0))
+   sofar = 0
+   for c in range(cycles):
+      target = int(round((c+1)*cycle))
+      sofar += on
+      off = target - sofar
+      sofar += off
+      wf.append(pigpio.pulse(1<<gpio, 0, on))
+      wf.append(pigpio.pulse(0, 1<<gpio, off))
+   return wf
+
+		
+		
+		
 def colourWindow(column,colour, start, stop):
 	for x in range(start, stop+1):		
 		pixels[column[x]] = colour	
@@ -259,154 +287,185 @@ def rainbow_cycle(wait):
         time.sleep(wait)
 
 #this is the code that runs when motion is detected
-def goRed():
-	for x in range(7):
+def goRed():	
+	pixels.fill((0,0,0))
+	pixels.show()
+	time.sleep(1)
+	
+
+	#turn the haunted house red
+	for x in range(7):	
+		#run a script that transmits using IR with its red code
+		os.system("python3 GoIR.py -p -g 27 -f colourRed.json 1")
 		pixels.fill((255,0,0))
 		pixels.show()
 		time.sleep(0.3)
-		pixels.fill((0,0,0))
+		#run a script that transmits using IR with its green code
+		os.system("python3 GoIR.py -p -g 27 -f colourGreen.json 1")
+		pixels.fill((0,255,0))
 		pixels.show()
 		time.sleep(0.3)
-
+	#os.system("sudo killall pigpiod")
+	time.sleep(1)
+	
+	pixels.fill((0,0,0))
+	pixels.show()
+	
+	
 #multiprocessing loveliness. the process starts now and will interupt when personDetected changes
 p = Process(target=cameraCode,args=(personDetected,))
 p.start()
+os.system("sudo pigpiod")
 
 #go forever, might want to change this to a time limited loop
 while True:	
-	#middle column
-	colourWindow(column2,colour3,0,11)		
+	now = datetime.now()
+	current_hour = now.strftime("%H")
+	
+	if current_hour >= 23 or current_hour <= 18:
+		pixels.fill((0,0,0))
+		pixels.show()
+		time.sleep(300)	
 		
-	#loop the windows
-	for x in range(4):
+	else:
+		#middle column
+		#colourWindow(column2,colour3,0,11)		
+			
+		#loop the windows
+		for x in range(4):
+			
+			#check for a person
+			if personDetected.value == 1:
+				goRed()
 		
-		#check for a person
+			#bottom right window
+			colourWindow(column1,colour1,7,10)
+			#top right
+			colourWindow(column1,colour2,18,22)
+			#bottom left window
+			colourWindow(column3,colour4,7,10)
+			#top left
+			colourWindow(column3,colour5,18,22)
+
+
+			#bottom right window
+			colourWindow(column1,colour5,7,10)
+			#top right
+			colourWindow(column1,colour2,18,22)
+			#bottom left window
+			colourWindow(column3,colour4,7,10)
+			#top left
+			colourWindow(column3,colour1,18,22)
+
+			pixels.show()
+			time.sleep(0.4)
+		
+
+			#bottom right window
+			colourWindow(column1,colour5,7,10)
+			#top right
+			colourWindow(column1,colour4,18,22)
+			#bottom left window
+			colourWindow(column3,colour2,7,10)
+			#top left
+			colourWindow(column3,colour1,18,22)
+		
+			#bottom right window
+			colourWindow(column1,colour1,7,10)
+			#top right
+			colourWindow(column1,colour4,18,22)
+			#bottom left window
+			colourWindow(column3,colour2,7,10)
+			#top left
+			colourWindow(column3,colour5,18,22)
+		
+			pixels.show()
+			time.sleep(0.4)
+			
+	#	goRed()
+		#circle the windows
+		for x in range(4):
+			#check for a person
+			if personDetected.value == 1:
+				goRed()
+		
+			#bottom right window
+			colourWindow(column1,colour1,7,10)
+			#top right
+			colourWindow(column1,colour4,18,22)
+			#bottom left window
+			colourWindow(column3,colour2,7,10)
+			#top left
+			colourWindow(column3,colour5,18,22)
+		
+			pixels.show()
+			time.sleep(0.3)	
+		
+			#bottom right window
+			colourWindow(column1,colour4,7,10)
+			#top right
+			colourWindow(column1,colour5,18,22)
+			#bottom left window
+			colourWindow(column3,colour1,7,10)
+			#top left
+			colourWindow(column3,colour2,18,22)
+		
+			pixels.show()
+			time.sleep(0.3)	
+
+			#bottom right window
+			colourWindow(column1,colour5,7,10)
+			#top right
+			colourWindow(column1,colour2,18,22)
+			#bottom left window
+			colourWindow(column3,colour4,7,10)
+			#top left
+			colourWindow(column3,colour1,18,22)
+		
+			pixels.show()
+			time.sleep(0.3)	
+		
+			#bottom right window
+			colourWindow(column1,colour2,7,10)
+			#top right
+			colourWindow(column1,colour1,18,22)
+			#bottom left window
+			colourWindow(column3,colour5,7,10)
+			#top left
+			colourWindow(column3,colour4,18,22)
+		
+			pixels.show()
+			time.sleep(0.3)	
+		
 		if personDetected.value == 1:
 			goRed()
-	
-		#bottom right window
-		colourWindow(column1,colour1,7,10)
-		#top right
-		colourWindow(column1,colour2,18,22)
-		#bottom left window
-		colourWindow(column3,colour4,7,10)
-		#top left
-		colourWindow(column3,colour5,18,22)
-
-
-		#bottom right window
-		colourWindow(column1,colour5,7,10)
-		#top right
-		colourWindow(column1,colour2,18,22)
-		#bottom left window
-		colourWindow(column3,colour4,7,10)
-		#top left
-		colourWindow(column3,colour1,18,22)
-
-		pixels.show()
-		time.sleep(0.4)
-	
-
-		#bottom right window
-		colourWindow(column1,colour5,7,10)
-		#top right
-		colourWindow(column1,colour4,18,22)
-		#bottom left window
-		colourWindow(column3,colour2,7,10)
-		#top left
-		colourWindow(column3,colour1,18,22)
-	
-		#bottom right window
-		colourWindow(column1,colour1,7,10)
-		#top right
-		colourWindow(column1,colour4,18,22)
-		#bottom left window
-		colourWindow(column3,colour2,7,10)
-		#top left
-		colourWindow(column3,colour5,18,22)
-	
-		pixels.show()
-		time.sleep(0.4)
-	
-	#circle the windows
-	for x in range(4):
-		#check for a person
-		if personDetected.value == 1:
-			goRed()
-	
-		#bottom right window
-		colourWindow(column1,colour1,7,10)
-		#top right
-		colourWindow(column1,colour4,18,22)
-		#bottom left window
-		colourWindow(column3,colour2,7,10)
-		#top left
-		colourWindow(column3,colour5,18,22)
-	
-		pixels.show()
-		time.sleep(0.3)	
-	
-		#bottom right window
-		colourWindow(column1,colour4,7,10)
-		#top right
-		colourWindow(column1,colour5,18,22)
-		#bottom left window
-		colourWindow(column3,colour1,7,10)
-		#top left
-		colourWindow(column3,colour2,18,22)
-	
-		pixels.show()
-		time.sleep(0.3)	
-
-		#bottom right window
-		colourWindow(column1,colour5,7,10)
-		#top right
-		colourWindow(column1,colour2,18,22)
-		#bottom left window
-		colourWindow(column3,colour4,7,10)
-		#top left
-		colourWindow(column3,colour1,18,22)
-	
-		pixels.show()
-		time.sleep(0.3)	
-	
-		#bottom right window
-		colourWindow(column1,colour2,7,10)
-		#top right
-		colourWindow(column1,colour1,18,22)
-		#bottom left window
-		colourWindow(column3,colour5,7,10)
-		#top left
-		colourWindow(column3,colour4,18,22)
-	
-		pixels.show()
-		time.sleep(0.3)	
-	
-	#rain
-	start = 38
-	for x in range(38,0,-1):
-		#check for a person
-		if personDetected.value == 1:
-			goRed()
-	
-		if x <= start - 2:
-			pixels[column1[x+2]] = (0,0,0)
-			pixels[column2[x+2]] = (0,0,0)
-			pixels[column3[x+2]] = (0,0,0)
 		
-		pixels[column1[x]] = (255,255,255)
-		pixels[column2[x]] = (255,255,255)
-		pixels[column3[x]] = (255,255,255)
-		pixels.show()
-		time.sleep(0.07)
+		#rain
+		start = 38
+		for x in range(38,0,-1):
+			#check for a person
+		
+			if x <= start - 2:
+				pixels[column1[x+2]] = (0,0,0)
+				pixels[column2[x+2]] = (0,0,0)
+				pixels[column3[x+2]] = (0,0,0)
+			
+			pixels[column1[x]] = (255,255,255)
+			pixels[column2[x]] = (255,255,255)
+			pixels[column3[x]] = (255,255,255)
+			pixels.show()
+			time.sleep(0.07)
+		if personDetected.value == 1:
+			goRed()
+		
+			
+		for x in range(3,0,-1):
+			pixels[column1[x]] = (0,0,0)
+			pixels[column2[x]] = (0,0,0)
+			pixels[column3[x]] = (0,0,0)	
+			pixels.show()
 
-	for x in range(3,0,-1):
-		pixels[column1[x]] = (0,0,0)
-		pixels[column2[x]] = (0,0,0)
-		pixels[column3[x]] = (0,0,0)	
+		pixels[86] = (0,0,0)
 		pixels.show()
-
-	pixels[86] = (0,0,0)
-	pixels.show()
-	
-	#needs more cool animations
+		
+		#needs more cool animations
